@@ -45,6 +45,7 @@ namespace SendEpsGrandia
                 ConfigureSendComprobantesEPS(new ElapsedEventHandler(this.OnTimerExecuteSendComprobantesEPSJobPrintProcess));
                 ConfigureRestaurarEstadosComprobanteEPS(new ElapsedEventHandler(this.OnTimerExecuteRestaurarEstadosComprobanteEPSProcess));
                 ConfigureLiberarPolizasEPS(new ElapsedEventHandler(this.OnTimerExecuteLiberarPolizasEPSProcess));
+                ConfigureRelanzarEPSComprobantes(new ElapsedEventHandler(this.OnTimerExecuteRelanzarEPSComprobantesProcess));
             }
             catch (Exception ex)
             {
@@ -88,6 +89,14 @@ namespace SendEpsGrandia
             timer.Start();
         }
 
+        private void ConfigureRelanzarEPSComprobantes(ElapsedEventHandler method)
+        {
+            double interval = Convert.ToDouble(ConfigurationManager.AppSettings["IntervalLiberarPolizasEPS"]);
+            Timer timer = new Timer { Interval = interval };
+            timer.Elapsed += method;
+            timer.Start();
+        }
+
         public void OnTimerExecuteSendDataEPSJobProcess(object sender, ElapsedEventArgs args)
         {
             try
@@ -124,6 +133,15 @@ namespace SendEpsGrandia
             catch (Exception ex) { LogError($"Error Timer LiberarPolizas: {ex}"); }
         }
 
+        public void OnTimerExecuteRelanzarEPSComprobantesProcess(object sender, ElapsedEventArgs args)
+        {
+            try
+            {
+                if (!RelanzarEPSJob.IsBusy) RelanzarEPSJob.RunWorkerAsync();
+            }
+            catch (Exception ex) { LogError($"Error Timer LiberarPolizas: {ex}"); }
+        }
+
 
         private void SendDataEPSJob_DoWork(object sender, DoWorkEventArgs e)
         {
@@ -143,6 +161,11 @@ namespace SendEpsGrandia
         private void LiberarPolizasEPS_DoWork(object sender, DoWorkEventArgs e)
         {
             new LiberarPolizasEPS().ExecuteProcess();
+        }
+
+        private void RelanzarEPSJob_DoWork(object sender, DoWorkEventArgs e)
+        {
+            new RelanzarEPSJobComprobante().ExecuteProcess();
         }
 
         private static void LogError(string message)

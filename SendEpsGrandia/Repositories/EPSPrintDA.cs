@@ -304,7 +304,9 @@ namespace SendEpsGrandia.Repositories
         {
             if (data == null || string.IsNullOrWhiteSpace(data.P_NIDHEADERPROC))
             {
-                return new ErrorServiceVM { P_NCODE = "1", P_SMESSAGE = "RequestProtecta es nulo o inválido" };
+                string msgErr = "RequestProtecta es nulo o inválido";
+                LogControl.save("EjecutarSavePolicyInterno - ValidacionRequest", $"NIDHEADERPROC: {data?.P_NIDHEADERPROC ?? "NULL"} | {msgErr}", "3");
+                return new ErrorServiceVM { P_NCODE = "1", P_SMESSAGE = msgErr };
             }
 
             long idHeaderProc = Convert.ToInt64(data.P_NIDHEADERPROC);
@@ -313,7 +315,10 @@ namespace SendEpsGrandia.Repositories
             if (dataSalud.P_NCODE != "0" || dataSalud.dataList == null || !dataSalud.dataList.Any())
             {
                 ActualizarEstadoTransacEps(idHeaderProc, 3);
-                return new ErrorServiceVM { P_NCODE = "1", P_SMESSAGE = dataSalud.P_SMESSAGE ?? "No se encontró información de salud en BD" };
+                string msgErr = dataSalud.P_SMESSAGE ?? "No se encontró información de salud en BD";
+                LogControl.save("EjecutarSavePolicyInterno - DataSalud", $"NIDHEADERPROC: {idHeaderProc} | Code: {dataSalud.P_NCODE} | {msgErr}", "3");
+
+                return new ErrorServiceVM { P_NCODE = "1", P_SMESSAGE = msgErr };
             }
 
             var item = dataSalud.dataList.First();
@@ -323,7 +328,10 @@ namespace SendEpsGrandia.Repositories
             if (dataEPS == null)
             {
                 ActualizarEstadoTransacEps(idHeaderProc, 3);
-                return new ErrorServiceVM { P_NCODE = "1", P_SMESSAGE = "Hubo un error al construir la estructura JSON para la EPS" };
+                string msgErr = "Hubo un error al construir la estructura JSON para la EPS";
+                LogControl.save("EjecutarSavePolicyInterno - ConstruirJSON", $"NIDHEADERPROC: {idHeaderProc} | Transac: {item.P_NTRANSAC} | {msgErr}", "3");
+
+                return new ErrorServiceVM { P_NCODE = "1", P_SMESSAGE = msgErr };
             }
 
             try
@@ -345,11 +353,6 @@ namespace SendEpsGrandia.Repositories
                     int estadoFinal = (responseBg.P_NCODE == "0") ? 2 : 3;
 
                     ActualizarEstadoTransacEps(idHeaderProc, estadoFinal);
-
-                    if(estadoFinal == 2)
-                    {
-                        FinalizardocumentosEPS(idHeaderProc);
-                    }
 
                     if (estadoFinal == 2)
                     {
@@ -373,13 +376,16 @@ namespace SendEpsGrandia.Repositories
                 else
                 {
                     ActualizarEstadoTransacEps(idHeaderProc, 3);
-                    return new ErrorServiceVM { P_NCODE = "1", P_SMESSAGE = "No se obtuvo respuesta de la EPS" };
+                    string msgErr = "No se obtuvo respuesta de la EPS";
+                    LogControl.save("EjecutarSavePolicyInterno - InvocarEPS", $"NIDHEADERPROC: {idHeaderProc} | {msgErr}", "3");
+
+                    return new ErrorServiceVM { P_NCODE = "1", P_SMESSAGE = msgErr };
                 }
             }
             catch (Exception ex)
             {
                 ActualizarEstadoTransacEps(idHeaderProc, 3);
-                LogControl.save("SavePolicyEPS - Excepción Fatal", ex.ToString(), "3");
+                LogControl.save("SavePolicyEPS - Excepción Fatal", $"NIDHEADERPROC: {idHeaderProc} | {ex}", "3");
 
                 try
                 {
@@ -710,93 +716,51 @@ namespace SendEpsGrandia.Repositories
         /// Gestiona operaciones variadas de la EPS según el tipo solicitado.
         /// Retorna metadatos, datos serializados o resultados de validación.
         /// </summary>
-        public RelanzarEPSVM GetManagementEPS(RelanzarDocumentoVM data, int tipo)
+        public List<EPSJobVM> GetManagementEPS(int tipo)
         {
-            var response = new RelanzarEPSVM();
+            List<EPSJobVM> jobsList = new List<EPSJobVM>();
 
             using (OracleConnection cn = new OracleConnection(ConfigurationManager.ConnectionStrings["Conexion"].ToString()))
             {
-                using (OracleCommand cmd = new OracleCommand())
+                using (OracleCommand cmd = new OracleCommand("SP_GET_RELANZAMIENTO_EPS", cn))
                 {
+                    cmd.CommandType = CommandType.StoredProcedure;
+
+                    // Parámetros de entrada (INPUT)
+                    cmd.Parameters.Add("P_NIDHEADERPROC", OracleDbType.Int64, DBNull.Value, ParameterDirection.Input);
+                    cmd.Parameters.Add("P_TIPO", OracleDbType.Int32, tipo, ParameterDirection.Input);
+                    cmd.Parameters.Add("P_NUSERCODE", OracleDbType.Int32, DBNull.Value, ParameterDirection.Input);
+
+                    // Parámetros de salida (OUTPUT)
+                    cmd.Parameters.Add("P_COD_ERR", OracleDbType.Int32, ParameterDirection.Output);
+                    cmd.Parameters.Add("P_SMESSAGE", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
+                    cmd.Parameters.Add("P_SJSON", OracleDbType.Clob, ParameterDirection.Output);
+                    cmd.Parameters.Add("P_NTYPE_TRANSAC", OracleDbType.Int32, ParameterDirection.Output);
+                    cmd.Parameters.Add("C_TABLE", OracleDbType.RefCursor, ParameterDirection.Output);
+
                     try
                     {
-                        cmd.Connection = cn;
-                        cmd.CommandText = GenericProcedures.sp_RelanzarEPS;
-                        cmd.CommandType = CommandType.StoredProcedure;
-
-                        cmd.Parameters.Add("P_NIDHEADERPROC", OracleDbType.Int64, data.nidheaderproc, ParameterDirection.Input);
-                        cmd.Parameters.Add("P_TIPO", OracleDbType.Int32, tipo, ParameterDirection.Input);
-                        cmd.Parameters.Add("P_NUSERCODE", OracleDbType.Int32, data.suser, ParameterDirection.Input);
-
-                        var P_NCODE = new OracleParameter("P_COD_ERR", OracleDbType.Int32, null, ParameterDirection.Output) { Size = 100 };
-                        var P_SMESSAGE = new OracleParameter("P_CP_SMESSAGEOD_ERR", OracleDbType.Varchar2, null, ParameterDirection.Output) { Size = 4000 };
-                        var P_SJSON = new OracleParameter("P_SJSON", OracleDbType.Clob, null, ParameterDirection.Output);
-                        var P_NTYPE_TRANSAC = new OracleParameter("P_NTYPE_TRANSAC", OracleDbType.Int32, null, ParameterDirection.Output);
-                        var C_TABLE = new OracleParameter("C_TABLE", OracleDbType.RefCursor, null, ParameterDirection.Output);
-
-                        cmd.Parameters.Add(P_NCODE);
-                        cmd.Parameters.Add(P_SMESSAGE);
-                        cmd.Parameters.Add(P_SJSON);
-                        cmd.Parameters.Add(P_NTYPE_TRANSAC);
-                        cmd.Parameters.Add(C_TABLE);
-
                         cn.Open();
-                        using (var reader = cmd.ExecuteReader())
-                        {
-                            response.P_NCODE = P_NCODE.Value == DBNull.Value ? 0 : Convert.ToInt32(P_NCODE.Value.ToString());
-                            response.P_SMESSAGE = P_SMESSAGE.Value?.ToString() ?? string.Empty;
-                            response.P_SJSON = (P_SJSON.Value is OracleClob clob && !clob.IsNull) ? clob.Value : string.Empty;
-                            response.P_NTYPE_TRANSAC = P_NTYPE_TRANSAC.Value == DBNull.Value ? 0 : Convert.ToInt32(P_NTYPE_TRANSAC.Value.ToString());
 
-                            if (tipo == 3 && reader != null)
-                            {
-                                var tableData = new List<DetalleTransacEPS>();
-                                while (reader.Read())
-                                {
-                                    tableData.Add(new DetalleTransacEPS
-                                    {
-                                        norder = reader["NORDER"] == DBNull.Value ? 0 : Convert.ToInt32(reader["NORDER"]),
-                                        nid_cotizacion = reader["NID_COTIZACION"] == DBNull.Value ? 0 : Convert.ToInt32(reader["NID_COTIZACION"]),
-                                        nidheaderproc = reader["NIDHEADERPROC"] == DBNull.Value ? 0 : Convert.ToInt32(reader["NIDHEADERPROC"]),
-                                        nid_proc = reader["NID_PROC"] == DBNull.Value ? string.Empty : reader["NID_PROC"].ToString(),
-                                        dcompdate = reader["DCOMPDATE"] == DBNull.Value ? string.Empty : reader["DCOMPDATE"].ToString(),
-                                        sstate = reader["SSTATE"] == DBNull.Value ? 0 : Convert.ToInt32(reader["SSTATE"]),
-                                        message = reader["MESSAGE"] == DBNull.Value ? string.Empty : reader["MESSAGE"].ToString(),
-                                        nusercode = reader["NUSERCODE"] == DBNull.Value ? 0 : Convert.ToInt32(reader["NUSERCODE"]),
-                                        suser = reader["SUSER"] == DBNull.Value ? string.Empty : reader["SUSER"].ToString()
-                                    });
-                                }
-                                response.TableData = tableData;
-                            }
-                        }
-
-                        if (!string.IsNullOrEmpty(response.P_SJSON))
+                        using (OracleDataReader reader = cmd.ExecuteReader())
                         {
-                            try
+                            while (reader.Read())
                             {
-                                if (tipo == 4)
-                                    response.dataListCotizacion = JsonConvert.DeserializeObject<dataQuotation_EPS>(response.P_SJSON);
-                                else if (tipo == 2)
-                                    response.JsonData = JsonConvert.DeserializeObject<Response_EPS_Transaccion>(response.P_SJSON);
-                            }
-                            catch (Exception exJson)
-                            {
-                                response.P_NCODE = 3;
-                                response.P_SMESSAGE = $"Error al deserializar JSON: {exJson.Message}";
-                                LogControl.save("GetManagementEPS - JSON", exJson.ToString(), "3");
+                                EPSJobVM item = new EPSJobVM();
+                                item.NIDHEADERPROC = reader["NIDHEADERPROC"] == DBNull.Value ? 0 : Convert.ToInt64(reader["NIDHEADERPROC"]);
+                                jobsList.Add(item);
                             }
                         }
                     }
                     catch (Exception ex)
                     {
-                        response.P_NCODE = 1;
-                        response.P_SMESSAGE = ex.Message;
-                        LogControl.save("GetManagementEPS", ex.ToString(), "3");
+                        LogControl.save("GetManagementEPSTipo11", ex.ToString(), "3");
+                        jobsList = new List<EPSJobVM>();
                     }
                 }
             }
 
-            return response;
+            return jobsList;
         }
 
 

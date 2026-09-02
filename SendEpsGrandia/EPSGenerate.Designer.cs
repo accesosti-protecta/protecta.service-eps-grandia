@@ -26,12 +26,13 @@ namespace SendEpsGrandia
             this.SendComprobantesEPSJob = new System.ComponentModel.BackgroundWorker();
             this.RestaurarEstadosComprobanteEPS = new System.ComponentModel.BackgroundWorker();
             this.LiberarPolizasEPS = new System.ComponentModel.BackgroundWorker();
-
+            this.RelanzarEPSJob = new System.ComponentModel.BackgroundWorker();
 
             this.SendDataEPSJob.DoWork += new System.ComponentModel.DoWorkEventHandler(this.SendDataEPSJob_DoWork);
             this.SendComprobantesEPSJob.DoWork += new System.ComponentModel.DoWorkEventHandler(this.SendComprobantesEPSJob_DoWork);
             this.RestaurarEstadosComprobanteEPS.DoWork += new System.ComponentModel.DoWorkEventHandler(this.RestaurarEstadosComprobanteEPS_DoWork);
             this.LiberarPolizasEPS.DoWork += new System.ComponentModel.DoWorkEventHandler(this.LiberarPolizasEPS_DoWork);
+            this.RelanzarEPSJob.DoWork += new System.ComponentModel.DoWorkEventHandler(this.RelanzarEPSJob_DoWork);
 
             this.ServiceName = "SendEPSGrandia";
         }
@@ -40,6 +41,7 @@ namespace SendEpsGrandia
         private System.ComponentModel.BackgroundWorker SendComprobantesEPSJob;
         private System.ComponentModel.BackgroundWorker RestaurarEstadosComprobanteEPS;
         private System.ComponentModel.BackgroundWorker LiberarPolizasEPS;
+        private System.ComponentModel.BackgroundWorker RelanzarEPSJob;
 
     }
 }
