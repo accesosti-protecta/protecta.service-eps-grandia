@@ -9,6 +9,7 @@ namespace SendEpsGrandia.Entities
     public class EPSJobVM
     {
         public dynamic NIDHEADERPROC { get; set; }
+        public int NRESEND { get; set; } = 0;
     }
 
     public class ErrorCode

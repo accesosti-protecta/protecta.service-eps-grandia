@@ -282,7 +282,8 @@ namespace SendEpsGrandia.Repositories
             {
                 var data = new EPSSavePolicyBM()
                 {
-                    P_NIDHEADERPROC = policyJobVM.NIDHEADERPROC.ToString()
+                    P_NIDHEADERPROC = policyJobVM.NIDHEADERPROC.ToString(),
+                    P_NRESEND = policyJobVM.NRESEND
                 };
 
                 response = await EjecutarSavePolicyInterno(data, null);

@@ -36,10 +36,13 @@ namespace SendEpsGrandia
                 {
                     try
                     {
-                        // Invocar la lógica de generación
-                        // Si PolicyGenerate es asíncrono (async Task), usar: PolicyGenerate(job).GetAwaiter().GetResult();
-                        // Si es sincrónico (void), usar simplemente:
-                        PolicyGenerate(job);
+                        job.NRESEND = 2;
+                        ErrorServiceVM result = PolicyGenerate(job).GetAwaiter().GetResult();
+
+                        if (result != null && result.P_NCODE != "0")
+                        {
+                            LogControl.save("ExecuteProcess_Item", "Error en NIDHEADERPROC " + job.NIDHEADERPROC + ": " + result.P_SMESSAGE, "3");
+                        }
                     }
                     catch (Exception exTask)
                     {
