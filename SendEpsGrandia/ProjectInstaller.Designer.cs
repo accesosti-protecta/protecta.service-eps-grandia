@@ -37,19 +37,19 @@ namespace SendEpsGrandia
             this.serviceProcessInstaller1.Username = null;
 
             #region Descripción Producción
-            //this.serviceInstaller1.Description = "WSSendEPSGrandia";
-            //this.serviceInstaller1.DisplayName = "WSSendEPSGrandia";
-            //this.serviceInstaller1.ServiceName = "WSSendEPSGrandia";
-            //this.serviceInstaller1.StartType = System.ServiceProcess.ServiceStartMode.Automatic;
-            //this.serviceInstaller1.AfterInstall += new System.Configuration.Install.InstallEventHandler(this.serviceInstaller1_AfterInstall);
+            this.serviceInstaller1.Description = "WSSendEPSGrandia";
+            this.serviceInstaller1.DisplayName = "WSSendEPSGrandia";
+            this.serviceInstaller1.ServiceName = "WSSendEPSGrandia";
+            this.serviceInstaller1.StartType = System.ServiceProcess.ServiceStartMode.Automatic;
+            this.serviceInstaller1.AfterInstall += new System.Configuration.Install.InstallEventHandler(this.serviceInstaller1_AfterInstall);
             #endregion
 
             #region Descripción Calidad - QA
-            this.serviceInstaller1.Description = "WSSendEPSGrandiaQA";
-            this.serviceInstaller1.DisplayName = "WSSendEPSGrandiaQA";
-            this.serviceInstaller1.ServiceName = "WSSendEPSGrandiaQA";
-            this.serviceInstaller1.StartType = System.ServiceProcess.ServiceStartMode.Automatic;
-            this.serviceInstaller1.AfterInstall += new System.Configuration.Install.InstallEventHandler(this.serviceInstaller1_AfterInstall);
+            //this.serviceInstaller1.Description = "WSSendEPSGrandiaQA";
+            //this.serviceInstaller1.DisplayName = "WSSendEPSGrandiaQA";
+            //this.serviceInstaller1.ServiceName = "WSSendEPSGrandiaQA";
+            //this.serviceInstaller1.StartType = System.ServiceProcess.ServiceStartMode.Automatic;
+            //this.serviceInstaller1.AfterInstall += new System.Configuration.Install.InstallEventHandler(this.serviceInstaller1_AfterInstall);
             #endregion
 
             this.Installers.AddRange(new System.Configuration.Install.Installer[] {
