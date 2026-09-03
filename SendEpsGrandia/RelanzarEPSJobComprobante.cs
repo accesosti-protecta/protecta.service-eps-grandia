@@ -75,7 +75,7 @@ namespace SendEpsGrandia
 
         public Task<ErrorServiceVM> SendDataEps(EPSJobVM job)
         {
-            return epsDA.SendDataEPS(job);
+            return epsDA.SendDataEPS(job, 1);
         }
     }
 }

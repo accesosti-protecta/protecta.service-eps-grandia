@@ -270,7 +270,7 @@ namespace SendEpsGrandia.Repositories
         /// Procesa la solicitud completa para guardar una póliza en la EPS.
         /// Delega la ejecución a EjecutarSavePolicyInterno manejando silenciosamente las excepciones fatales.
         /// </summary>
-        public async Task<ErrorServiceVM> SendDataEPS(EPSJobVM policyJobVM)
+        public async Task<ErrorServiceVM> SendDataEPS(EPSJobVM policyJobVM, int tipo = 0)
         {
             var response = new ErrorServiceVM();
             if (policyJobVM == null || policyJobVM.NIDHEADERPROC <= 0)
@@ -286,7 +286,7 @@ namespace SendEpsGrandia.Repositories
                     P_NRESEND = policyJobVM.NRESEND
                 };
 
-                response = await EjecutarSavePolicyInterno(data, null);
+                response = await EjecutarSavePolicyInterno(data, null, tipo);
             }
             catch (Exception ex)
             {
@@ -301,7 +301,7 @@ namespace SendEpsGrandia.Repositories
         /// Construye la carga útil (Payload JSON), solicita autorización y transfiere el registro de la póliza a la EPS.
         /// Cambia los estados de la base de datos basándose en el éxito o fallo de la respuesta de red.
         /// </summary>
-        private async Task<ErrorServiceVM> EjecutarSavePolicyInterno(EPSSavePolicyBM data, Action accionPostGuardado)
+        private async Task<ErrorServiceVM> EjecutarSavePolicyInterno(EPSSavePolicyBM data, Action accionPostGuardado, int tipo = 0)
         {
             if (data == null || string.IsNullOrWhiteSpace(data.P_NIDHEADERPROC))
             {
@@ -315,7 +315,7 @@ namespace SendEpsGrandia.Repositories
 
             if (dataSalud.P_NCODE != "0" || dataSalud.dataList == null || !dataSalud.dataList.Any())
             {
-                ActualizarEstadoTransacEps(idHeaderProc, 3);
+                ActualizarEstadoTransacEps(idHeaderProc, 3, tipo);
                 string msgErr = dataSalud.P_SMESSAGE ?? "No se encontró información de salud en BD";
                 LogControl.save("EjecutarSavePolicyInterno - DataSalud", $"NIDHEADERPROC: {idHeaderProc} | Code: {dataSalud.P_NCODE} | {msgErr}", "3");
 
@@ -328,7 +328,7 @@ namespace SendEpsGrandia.Repositories
 
             if (dataEPS == null)
             {
-                ActualizarEstadoTransacEps(idHeaderProc, 3);
+                ActualizarEstadoTransacEps(idHeaderProc, 3, tipo);
                 string msgErr = "Hubo un error al construir la estructura JSON para la EPS";
                 LogControl.save("EjecutarSavePolicyInterno - ConstruirJSON", $"NIDHEADERPROC: {idHeaderProc} | Transac: {item.P_NTRANSAC} | {msgErr}", "3");
 
@@ -353,7 +353,7 @@ namespace SendEpsGrandia.Repositories
                     var responseBg = ProcesarRespuestaEPS(item, dataEPS, resultEPS, transaccion);
                     int estadoFinal = (responseBg.P_NCODE == "0") ? 2 : 3;
 
-                    ActualizarEstadoTransacEps(idHeaderProc, estadoFinal);
+                    ActualizarEstadoTransacEps(idHeaderProc, estadoFinal, tipo);
 
                     if (estadoFinal == 2)
                     {
@@ -376,7 +376,7 @@ namespace SendEpsGrandia.Repositories
                 }
                 else
                 {
-                    ActualizarEstadoTransacEps(idHeaderProc, 3);
+                    ActualizarEstadoTransacEps(idHeaderProc, 3, tipo);
                     string msgErr = "No se obtuvo respuesta de la EPS";
                     LogControl.save("EjecutarSavePolicyInterno - InvocarEPS", $"NIDHEADERPROC: {idHeaderProc} | {msgErr}", "3");
 
@@ -385,7 +385,7 @@ namespace SendEpsGrandia.Repositories
             }
             catch (Exception ex)
             {
-                ActualizarEstadoTransacEps(idHeaderProc, 3);
+                ActualizarEstadoTransacEps(idHeaderProc, 3, tipo);
                 LogControl.save("SavePolicyEPS - Excepción Fatal", $"NIDHEADERPROC: {idHeaderProc} | {ex}", "3");
 
                 try
@@ -852,23 +852,58 @@ namespace SendEpsGrandia.Repositories
         }
 
 
-        public void ActualizarEstadoTransacEps(long idHeaderProc, int estado)
+        public void ActualizarEstadoTransacEps(long idHeaderProc, int estado, int tipo = 0)
         {
             try
             {
                 string connString = System.Configuration.ConfigurationManager.ConnectionStrings["Conexion"].ConnectionString;
                 using (var connection = new OracleConnection(connString))
-                using (var command = new OracleCommand("UPDATE TBL_PD_COT_TRANSAC SET TRANSAC_EPS = :p_estado WHERE NIDHEADERPROC = :p_cabecera", connection))
                 {
-                    command.Parameters.Add("p_estado", OracleDbType.Int32).Value = estado;
-                    command.Parameters.Add("p_cabecera", OracleDbType.Int64).Value = idHeaderProc;
                     connection.Open();
-                    command.ExecuteNonQuery();
+                    string sql;
+
+                    if (tipo == 1)
+                    {
+                        // Flujo de Reintentos (RelanzarEPSJobComprobante)
+                        if (estado == 2)
+                        {
+                            sql = "UPDATE TBL_PD_COT_TRANSAC SET TRANSAC_EPS = 2 WHERE NIDHEADERPROC = :p_cabecera";
+                        }
+                        else
+                        {
+                            // Fallo: Incremento progresivo de reintentos (5 -> 6 -> 7)
+                            sql = @"UPDATE TBL_PD_COT_TRANSAC 
+                               SET TRANSAC_EPS = CASE 
+                                                    WHEN NVL(TRANSAC_EPS, 0) < 5 THEN 5
+                                                    WHEN TRANSAC_EPS = 5 THEN 6
+                                                    ELSE 7
+                                                 END 
+                             WHERE NIDHEADERPROC = :p_cabecera";
+                        }
+                    }
+                    else
+                    {
+                        sql = "UPDATE TBL_PD_COT_TRANSAC SET TRANSAC_EPS = :p_estado WHERE NIDHEADERPROC = :p_cabecera";
+                    }
+
+                    using (var command = new OracleCommand(sql, connection))
+                    {
+                        command.BindByName = true;
+
+                        if (tipo != 1)
+                        {
+                            command.Parameters.Add("p_estado", OracleDbType.Int32).Value = estado;
+                        }
+
+                        command.Parameters.Add("p_cabecera", OracleDbType.Int64).Value = idHeaderProc;
+
+                        command.ExecuteNonQuery();
+                    }
                 }
             }
             catch (Exception ex)
             {
-                LogControl.save("ActualizarEstadoTransacEps", $"No se pudo cambiar el estado a {estado} para la cabecera {idHeaderProc}. Detalle: " + ex.Message, "3");
+                LogControl.save("ActualizarEstadoTransacEps", $"No se pudo cambiar el estado a {estado} (Tipo {tipo}) para la cabecera {idHeaderProc}. Detalle: " + ex.Message, "3");
             }
         }
 
