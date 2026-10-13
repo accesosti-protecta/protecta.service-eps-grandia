@@ -15,7 +15,6 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Threading.Tasks;
-using System.Web.Hosting;
 
 namespace SendEpsGrandia.Repositories
 {
@@ -27,9 +26,11 @@ namespace SendEpsGrandia.Repositories
         private const string LOG_GLOBAL_ERR = "ErrorSendDataEPS - 999_ExcepcionGeneral";
         private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
 
+
         static EPSPrintDA()
         {
             System.Net.ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls12;
+            System.Net.ServicePointManager.DefaultConnectionLimit = 50;
         }
 
         public string GetParamConfig(string param)
@@ -62,7 +63,6 @@ namespace SendEpsGrandia.Repositories
 
             return result;
         }
-
 
         public List<EPSJobVM> GetJobList(int cantidadSolicitada)
         {
@@ -106,7 +106,6 @@ namespace SendEpsGrandia.Repositories
             return jobsList;
         }
 
-
         public List<ComprobantesEpsBM> GetJobsSendComprobantesEPS(int cantidadSolicitada)
         {
             List<ComprobantesEpsBM> response = new List<ComprobantesEpsBM>();
@@ -143,7 +142,6 @@ namespace SendEpsGrandia.Repositories
                                 item.NRECEIPT = reader["NRECEIPT"] == DBNull.Value ? 0 : Convert.ToInt64(reader["NRECEIPT"]);
                                 item.P_NID_COTIZACION = reader["NID_COTIZACION"] == DBNull.Value ? 0 : Convert.ToInt32(reader["NID_COTIZACION"]);
                                 item.NTIMES = reader["NTIMES"] == DBNull.Value ? 0 : int.Parse(reader["NTIMES"].ToString());
-                                // Nota de Credito
                                 item.SBILLTYPE_O = reader["SBILLTYPE_O"] == DBNull.Value ? string.Empty : reader["SBILLTYPE_O"].ToString();
                                 item.NINSUR_AREA_O = reader["NINSUR_AREA_O"] == DBNull.Value ? string.Empty : reader["NINSUR_AREA_O"].ToString();
                                 item.NBILLNUM_O = reader["NBILLNUM_O"] == DBNull.Value ? string.Empty : reader["NBILLNUM_O"].ToString();
@@ -172,6 +170,11 @@ namespace SendEpsGrandia.Repositories
 
             try
             {
+                proceso = string.IsNullOrEmpty(proceso) ? string.Empty : (proceso.Length > 200 ? proceso.Substring(0, 200) : proceso);
+                url = string.IsNullOrEmpty(url) ? string.Empty : (url.Length > 4000 ? url.Substring(0, 4000) : url);
+                resultados = string.IsNullOrEmpty(resultados) ? string.Empty : (resultados.Length > 4000 ? resultados.Substring(0, 4000) : resultados);
+                nid_proc = string.IsNullOrEmpty(nid_proc) ? string.Empty : (nid_proc.Length > 30 ? nid_proc.Substring(0, 30) : nid_proc);
+
                 using (OracleConnection cn = new OracleConnection(connectionString))
                 using (OracleCommand cmd = new OracleCommand("INSUDB.INS_TBL_PD_LOG_AUTH", cn))
                 {
@@ -179,7 +182,7 @@ namespace SendEpsGrandia.Repositories
                     cmd.Parameters.Add("P_NID_COTIZACION", OracleDbType.Int64).Value = cotizacion;
                     cmd.Parameters.Add("P_SCOD_PROCESS", OracleDbType.Varchar2).Value = (object)proceso ?? DBNull.Value;
                     cmd.Parameters.Add("P_SURL", OracleDbType.Varchar2).Value = (object)url ?? DBNull.Value;
-                    cmd.Parameters.Add("P_SJSON", OracleDbType.Varchar2).Value = (object)parametros ?? DBNull.Value;
+                    cmd.Parameters.Add("P_SJSON", OracleDbType.Clob).Value = (object)parametros ?? DBNull.Value;
                     cmd.Parameters.Add("P_SRESULT", OracleDbType.Varchar2).Value = (object)resultados ?? DBNull.Value;
                     cmd.Parameters.Add("P_NID_PROC", OracleDbType.Varchar2).Value = (object)nid_proc ?? DBNull.Value;
 
@@ -217,7 +220,6 @@ namespace SendEpsGrandia.Repositories
             }
         }
 
-
         public ErrorServiceVM ActualizarEstadoComprobantesEPS()
         {
             ErrorServiceVM response = new ErrorServiceVM
@@ -236,7 +238,6 @@ namespace SendEpsGrandia.Repositories
                         cmd.CommandText = GenericProcedures.sp_ActualizarEstadoComprobante;
                         cmd.CommandType = CommandType.StoredProcedure;
 
-                        // Parámetros de salida del Procedure
                         var pCodErr = new OracleParameter("P_COD_ERR", OracleDbType.Int32, ParameterDirection.Output);
                         var pSMessage = new OracleParameter("P_SMESSAGE", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
 
@@ -265,11 +266,6 @@ namespace SendEpsGrandia.Repositories
             return response;
         }
 
-
-        /// <summary>
-        /// Procesa la solicitud completa para guardar una póliza en la EPS.
-        /// Delega la ejecución a EjecutarSavePolicyInterno manejando silenciosamente las excepciones fatales.
-        /// </summary>
         public async Task<ErrorServiceVM> SendDataEPS(EPSJobVM policyJobVM, int tipo = 0)
         {
             var response = new ErrorServiceVM();
@@ -297,10 +293,6 @@ namespace SendEpsGrandia.Repositories
             return response;
         }
 
-        /// <summary>
-        /// Construye la carga útil (Payload JSON), solicita autorización y transfiere el registro de la póliza a la EPS.
-        /// Cambia los estados de la base de datos basándose en el éxito o fallo de la respuesta de red.
-        /// </summary>
         private async Task<ErrorServiceVM> EjecutarSavePolicyInterno(EPSSavePolicyBM data, Action accionPostGuardado, int tipo = 0)
         {
             if (data == null || string.IsNullOrWhiteSpace(data.P_NIDHEADERPROC))
@@ -398,7 +390,6 @@ namespace SendEpsGrandia.Repositories
                 return new ErrorServiceVM { P_NCODE = "1", P_SMESSAGE = "Error interno durante la transmisión: " + ex.Message };
             }
         }
-
 
         private ErrorServiceVM ProcesarRespuestaEPS(DataPolicyVM item, dataTransaccion dataEPS, Response_EPS_Transaccion resultEPS, string transaction)
         {
@@ -702,7 +693,6 @@ namespace SendEpsGrandia.Repositories
             return result;
         }
 
-
         private async Task<Response_EPS_Transaccion> InvocarServicioEPS(dataTransaccion dataEPS, string transaccion)
         {
             string uriEmision = GetParamConfig("urlEmisionEPS_SCTR");
@@ -713,10 +703,6 @@ namespace SendEpsGrandia.Repositories
             return await invocarServicio_EPS_TRA(dataEPS.codigoCotizacion, JsonConvert.SerializeObject(dataEPS), transaccion, dataEPS.codigoProceso);
         }
 
-        /// <summary>
-        /// Gestiona operaciones variadas de la EPS según el tipo solicitado.
-        /// Retorna metadatos, datos serializados o resultados de validación.
-        /// </summary>
         public List<EPSJobVM> GetManagementEPS(int tipo)
         {
             List<EPSJobVM> jobsList = new List<EPSJobVM>();
@@ -727,12 +713,10 @@ namespace SendEpsGrandia.Repositories
                 {
                     cmd.CommandType = CommandType.StoredProcedure;
 
-                    // Parámetros de entrada (INPUT)
                     cmd.Parameters.Add("P_NIDHEADERPROC", OracleDbType.Int64, DBNull.Value, ParameterDirection.Input);
                     cmd.Parameters.Add("P_TIPO", OracleDbType.Int32, tipo, ParameterDirection.Input);
                     cmd.Parameters.Add("P_NUSERCODE", OracleDbType.Int32, DBNull.Value, ParameterDirection.Input);
 
-                    // Parámetros de salida (OUTPUT)
                     cmd.Parameters.Add("P_COD_ERR", OracleDbType.Int32, ParameterDirection.Output);
                     cmd.Parameters.Add("P_SMESSAGE", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
                     cmd.Parameters.Add("P_SJSON", OracleDbType.Clob, ParameterDirection.Output);
@@ -763,7 +747,6 @@ namespace SendEpsGrandia.Repositories
 
             return jobsList;
         }
-
 
         public DataPolicyEPSVM getDataSalud(EPSSavePolicyBM data)
         {
@@ -851,7 +834,6 @@ namespace SendEpsGrandia.Repositories
             return DateTime.TryParse(dbValue.ToString(), out DateTime date) ? date.ToString("dd/MM/yyyy") : dbValue.ToString();
         }
 
-
         public void ActualizarEstadoTransacEps(long idHeaderProc, int estado, int tipo = 0)
         {
             try
@@ -864,21 +846,23 @@ namespace SendEpsGrandia.Repositories
 
                     if (tipo == 1)
                     {
-                        // Flujo de Reintentos (RelanzarEPSJobComprobante)
                         if (estado == 2)
                         {
                             sql = "UPDATE TBL_PD_COT_TRANSAC SET TRANSAC_EPS = 2 WHERE NIDHEADERPROC = :p_cabecera";
                         }
                         else
                         {
-                            // Fallo: Incremento progresivo de reintentos (5 -> 6 -> 7)
                             sql = @"UPDATE TBL_PD_COT_TRANSAC 
-                               SET TRANSAC_EPS = CASE 
-                                                    WHEN NVL(TRANSAC_EPS, 0) < 5 THEN 5
-                                                    WHEN TRANSAC_EPS = 5 THEN 6
-                                                    ELSE 7
-                                                 END 
-                             WHERE NIDHEADERPROC = :p_cabecera";
+                                       SET TRANSAC_EPS = CASE 
+                                                           WHEN TRANSAC_EPS = 95 THEN 5
+                                                           WHEN TRANSAC_EPS = 96 THEN 6
+                                                           WHEN TRANSAC_EPS = 97 THEN 7
+                                                           WHEN TRANSAC_EPS = 99 THEN 5
+                                                           WHEN NVL(TRANSAC_EPS, 0) < 5 THEN 5
+                                                           WHEN TRANSAC_EPS = 5 THEN 6
+                                                           ELSE 7
+                                                         END 
+                                     WHERE NIDHEADERPROC = :p_cabecera";
                         }
                     }
                     else
@@ -907,7 +891,6 @@ namespace SendEpsGrandia.Repositories
             }
         }
 
-
         private string MapTipoTransaccion(string tipoTransaccion)
         {
             switch (tipoTransaccion)
@@ -926,10 +909,6 @@ namespace SendEpsGrandia.Repositories
             }
         }
 
-        /// <summary>
-        /// Mapea la información recuperada de BD hacia la estructura de la solicitud EPS final.
-        /// Contiene conversiones de tipos y formatos de fecha esenciales.
-        /// </summary>
         private dataTransaccion ConstruirDataTransaccion(DataPolicyVM item)
         {
             var dataEPS = new dataTransaccion();
@@ -956,11 +935,11 @@ namespace SendEpsGrandia.Repositories
                 dataEPS.codigoTipoTransaccion = item.P_NTRANSAC;
                 dataEPS.fechaTransaccion = FormatearFecha(item.P_FECHA_TRANSACCION);
                 dataEPS.codigoUsuarioRegistro = item.P_NUSERCODE;
-                dataEPS.primaMinimaAutorizada = decimal.Parse(item.P_NPREM_MINIMA);
-                dataEPS.primaComercial = Convert.ToDecimal(item.P_NAMO_AFEC);
-                dataEPS.igv = Convert.ToDecimal(item.P_NIVA);
-                dataEPS.derechoEmision = new string[] { "5" }.Contains(item.P_NTRANSAC) ? 0 : Convert.ToDecimal(item.P_NDE);
-                dataEPS.primaTotal = Convert.ToDecimal(item.P_NAMOUNT);
+                dataEPS.primaMinimaAutorizada = ParseDecimalInvariante(item.P_NPREM_MINIMA);
+                dataEPS.primaComercial = ParseDecimalInvariante(item.P_NAMO_AFEC);
+                dataEPS.igv = ParseDecimalInvariante(item.P_NIVA);
+                dataEPS.derechoEmision = new string[] { "5" }.Contains(item.P_NTRANSAC) ? 0 : ParseDecimalInvariante(item.P_NDE);
+                dataEPS.primaTotal = ParseDecimalInvariante(item.P_NAMOUNT);
                 dataEPS.cipPagoEfectivo = item.P_SCOD_CIP;
                 dataEPS.sede = item.P_SLOCATION;
                 dataEPS.riesgos = !new string[] { "6", "7" }.Contains(item.P_NTRANSAC) ? GetRiesgos(item.P_NID_COTIZACION, item.P_NID_PROC) : null;
@@ -995,7 +974,6 @@ namespace SendEpsGrandia.Repositories
                         cmd.Parameters.Add(P_FECHA_PAGO);
 
                         cn.Open();
-
                         cmd.ExecuteNonQuery();
 
                         var valOutput = P_FECHA_PAGO.Value?.ToString();
@@ -1046,10 +1024,6 @@ namespace SendEpsGrandia.Repositories
             return fecha;
         }
 
-        /// <summary>
-        /// Obtiene la lista de asegurados desde la base de datos para un proceso específico.
-        /// Utiliza un bloque 'using' para asegurar la liberación del cursor en Oracle.
-        /// </summary>
         public List<asegurados> GetAsegurados(string nid_proc)
         {
             List<asegurados> resultPackage = new List<asegurados>();
@@ -1073,7 +1047,6 @@ namespace SendEpsGrandia.Repositories
 
                         using (var odr = cmd.ExecuteReader())
                         {
-                            var tableData = new List<DetalleTransacEPS>();
                             while (odr.Read())
                             {
                                 asegurados item = new asegurados();
@@ -1189,7 +1162,7 @@ namespace SendEpsGrandia.Repositories
                     if (!resServices.IsSuccessStatusCode || string.IsNullOrEmpty(resultToken))
                     {
                         LogControl.save("invocarServicio_EPS - API EMI", resultToken, "3");
-                        InsertLog(Convert.ToInt64(nid_cotizacion), "02 - RESPUESTA  TOKEN EPS [EPS ERROR] - " + transaccion, urlToken, "No se genero Token del servicio EPS. Detalle: " + resultToken, null, nid_proc);
+                        InsertLog(Convert.ToInt64(nid_cotizacion), "02 - RESPUESTA TOKEN EPS [EPS ERROR] - " + transaccion, urlToken, "No se genero Token del servicio EPS. Detalle: " + resultToken, null, nid_proc);
                     }
                     else
                     {
@@ -1200,12 +1173,11 @@ namespace SendEpsGrandia.Repositories
             catch (Exception ex)
             {
                 LogControl.save("invocarServicio_EPS - API EMI Token", ex.ToString(), "3");
-                InsertLog(Convert.ToInt64(nid_cotizacion), "02 - RESPUESTA  TOKEN EPS [EPS ERROR] - " + transaccion, urlToken, ex.Message, null, nid_proc);
+                InsertLog(Convert.ToInt64(nid_cotizacion), "02 - RESPUESTA TOKEN EPS [EPS ERROR] - " + transaccion, urlToken, ex.Message, null, nid_proc);
             }
 
             return response;
         }
-
 
         public async Task<Response_EPS_Transaccion> invocarServicio_EPS_TRA(string cotizacion, string json, string transaccion, string nid_proc)
         {
@@ -1227,10 +1199,6 @@ namespace SendEpsGrandia.Repositories
                 LogControl.save("invocarServicio_EPS - API EMI", ex.ToString(), "3");
                 var urlEmisionEPS_SCTR = GetParamConfig("urlEmisionEPS_SCTR");
                 InsertLog(nid_cotizacion, "02 - RESPUESTAS EPS [MG ERROR] - " + transaccion, urlEmisionEPS_SCTR, ex.ToString(), null, nid_proc);
-            }
-            finally
-            {
-                // _semaphore.Release();
             }
 
             return result;
@@ -1262,8 +1230,6 @@ namespace SendEpsGrandia.Repositories
                         cmd.Parameters.Add("P_NID_PROC", OracleDbType.Varchar2, nid_proc, ParameterDirection.Input);
 
                         cn.Open();
-
-                        // CORRECCIÓN: Un SP que hace INSERT debe ejecutarse con ExecuteNonQuery, no ExecuteReader.
                         cmd.ExecuteNonQuery();
                     }
                     catch (Exception ex)
@@ -1274,15 +1240,6 @@ namespace SendEpsGrandia.Repositories
             }
         }
 
-        /// <summary>
-        /// Envía una solicitud HTTP POST asíncrona hacia la API de la EPS.
-        /// </summary>
-        /// <param name="resultToken">Token Bearer de autenticación previamente validado.</param>
-        /// <param name="json">Carga útil serializada a transferir.</param>
-        /// <param name="transaccion">Nombre de la operación para trazabilidad en logs.</param>
-        /// <param name="nid_proc">Código del proceso.</param>
-        /// <param name="cotizacion">Identificador de la cotización para relacionar el log.</param>
-        /// <returns>El objeto Response_EPS_Transaccion deserializado, o null si la conexión falla.</returns>
         private async Task<Response_EPS_Transaccion> generarEnvioDataEPS(AuthEPSResult resultToken, string json, string transaccion, string nid_proc, string cotizacion)
         {
             Response_EPS_Transaccion response = null;
@@ -1332,13 +1289,9 @@ namespace SendEpsGrandia.Repositories
             return response;
         }
 
-        /// <summary>
-        /// Ejecuta el proceso de limpieza y actualización de estados para comprobantes atascados.
-        /// Retorna a estado 1 aquellos que pasen la validación del log.
-        /// </summary>
         public ErrorServiceVM RestaurarEstadoComprobantesEps()
         {
-            var response = new ErrorServiceVM
+            ErrorServiceVM response = new ErrorServiceVM
             {
                 P_NCODE = "0",
                 P_SMESSAGE = "OK"
@@ -1376,13 +1329,9 @@ namespace SendEpsGrandia.Repositories
             return response;
         }
 
-        /// <summary>
-        /// Ejecuta el proceso de relanzamiento de EPS específicamente para evaluar concurrencia 
-        /// y liberar pólizas atascadas en RAM/CPU (P_TIPO = 9).
-        /// </summary>
         public ErrorServiceVM LiberarPolizasEpsAtascadas()
         {
-            var response = new ErrorServiceVM
+            ErrorServiceVM response = new ErrorServiceVM
             {
                 P_NCODE = "0",
                 P_SMESSAGE = "OK"
@@ -1400,7 +1349,6 @@ namespace SendEpsGrandia.Repositories
                         cmd.Parameters.Add("P_TIPO", OracleDbType.Int32, 9, ParameterDirection.Input);
                         cmd.Parameters.Add("P_NUSERCODE", OracleDbType.Int32, DBNull.Value, ParameterDirection.Input);
 
-                        // Parámetros de Salida obligatorios por la firma del SP
                         var pCodErr = new OracleParameter("P_COD_ERR", OracleDbType.Int32, null, ParameterDirection.Output) { Size = 100 };
                         var pSMessage = new OracleParameter("P_SMESSAGE", OracleDbType.Varchar2, null, ParameterDirection.Output) { Size = 4000 };
                         var pSJson = new OracleParameter("P_SJSON", OracleDbType.Clob, null, ParameterDirection.Output);
@@ -1433,7 +1381,7 @@ namespace SendEpsGrandia.Repositories
 
         public ErrorServiceVM FinalizardocumentosEPS(long nidheaderproc)
         {
-            var response = new ErrorServiceVM
+            ErrorServiceVM response = new ErrorServiceVM
             {
                 P_NCODE = "0",
                 P_SMESSAGE = "OK"
@@ -1451,7 +1399,6 @@ namespace SendEpsGrandia.Repositories
                         cmd.Parameters.Add("P_TIPO", OracleDbType.Int32, 10, ParameterDirection.Input);
                         cmd.Parameters.Add("P_NUSERCODE", OracleDbType.Int32, DBNull.Value, ParameterDirection.Input);
 
-                        // Parámetros de Salida obligatorios por la firma del SP
                         var pCodErr = new OracleParameter("P_COD_ERR", OracleDbType.Int32, null, ParameterDirection.Output) { Size = 100 };
                         var pSMessage = new OracleParameter("P_SMESSAGE", OracleDbType.Varchar2, null, ParameterDirection.Output) { Size = 4000 };
                         var pSJson = new OracleParameter("P_SJSON", OracleDbType.Clob, null, ParameterDirection.Output);
@@ -1474,12 +1421,19 @@ namespace SendEpsGrandia.Repositories
                     {
                         response.P_NCODE = "1";
                         response.P_SMESSAGE = ex.Message;
-                        LogControl.save("LiberarPolizasEpsAtascadas", ex.ToString(), "3");
+                        LogControl.save("FinalizardocumentosEPS", ex.ToString(), "3");
                     }
                 }
             }
 
             return response;
+        }
+
+        private decimal ParseDecimalInvariante(string valor)
+        {
+            if (string.IsNullOrWhiteSpace(valor)) return 0m;
+            valor = valor.Trim().Replace(',', '.');
+            return decimal.TryParse(valor, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal res) ? res : 0m;
         }
     }
 }

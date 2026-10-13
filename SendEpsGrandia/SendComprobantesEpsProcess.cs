@@ -6,6 +6,7 @@ using SendEpsGrandia.Repositories;
 using SendEpsGrandia.Util;
 using System;
 using System.Collections.Generic;
+using System.Configuration;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -17,18 +18,22 @@ namespace SendEpsGrandia
     /// <summary>
     /// Procesa el envío de comprobantes (facturas y notas de crédito) a la EPS en segundo plano.
     /// Implementa limitación estricta de concurrencia mediante SemaphoreSlim y 
-    /// un patrón "Circuit Breaker" para abortar lotes ante caídas masivas de red.
+    /// un patrón Circuit Breaker con ventana de enfriamiento (Cooldown) ante caídas masivas de red.
     /// </summary>
     public class SendComprobantesEpsProcess : GenericMethods
     {
-        private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(Convert.ToInt32(GetValueConfig("timeout_EPS"))) };
+        private static readonly HttpClient _httpClient = new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(Convert.ToInt32(ConfigurationManager.AppSettings["timeout_EPS"] ?? "180"))
+        };
 
         private static readonly object _fileLock = new object();
 
         // Control de concurrencia de hilos
         private static SemaphoreSlim _semaphoreComprobantes;
         private static readonly object _semaphoreLock = new object();
-        private static int _currentMaxLimit = 0;
+        private static int _fallosConsecutivosRed = 0;
+        private static DateTime _ultimoFalloRed = DateTime.MinValue;
 
         private const string LOG_TOKEN_ERR = "ErrorComprobantesEPS - 901_Token";
         private const string LOG_TIMEOUT_ERR = "ErrorComprobantesEPS - 902_TimeoutRed";
@@ -37,9 +42,10 @@ namespace SendEpsGrandia
 
         /// <summary>
         /// Método principal (Orquestador).
-        /// 1. Inicializa el límite de hilos en caliente.
-        /// 2. Solicita a la BD exactamente los registros correspondientes a los hilos libres.
-        /// 3. Despacha tareas en paralelo (Fire-and-Forget) protegiendo el flujo con un Circuit Breaker.
+        /// 1. Verifica estado del Circuit Breaker y aplica ventana de enfriamiento si corresponde.
+        /// 2. Inicializa el límite de hilos en caliente.
+        /// 3. Solicita a la BD exactamente los registros correspondientes a los hilos libres.
+        /// 4. Despacha tareas en paralelo protegiendo el flujo ante caídas de red.
         /// </summary>
         public void ExecuteProcess()
         {
@@ -47,7 +53,22 @@ namespace SendEpsGrandia
             {
                 EPSPrintDA epsDA = new EPSPrintDA();
 
-                // 1. INICIALIZAR Y ACTUALIZAR SEMÁFORO DINÁMICAMENTE
+                // 1. EVALUAR CIRCUIT BREAKER CON VENTANA DE ENFRIAMIENTO (60 SEGUNDOS)
+                if (Interlocked.CompareExchange(ref _fallosConsecutivosRed, 0, 0) >= 3)
+                {
+                    if ((DateTime.Now - _ultimoFalloRed).TotalSeconds >= 60)
+                    {
+                        Interlocked.Exchange(ref _fallosConsecutivosRed, 0);
+                        LogControl.save(LOG_TIMEOUT_ERR, "Circuit Breaker: Se ha restablecido el contador tras superar la ventana de enfriamiento (60s). Reanudando envíos.", "1");
+                    }
+                    else
+                    {
+                        // Esperar a que concluya el periodo de enfriamiento sin sobrecargar la base de datos
+                        return;
+                    }
+                }
+
+                // 2. INICIALIZAR Y ACTUALIZAR SEMÁFORO DINÁMICAMENTE
                 string paramHilos = epsDA.GetParamConfig("HILOS_COMPROBANTE_EPS");
                 int maxLimit = (int.TryParse(paramHilos, out int val) && val > 0) ? val : 5;
 
@@ -62,15 +83,13 @@ namespace SendEpsGrandia
                     }
                 }
 
-                // 2. CONSULTAR ESPACIOS DISPONIBLES AHORA
+                // 3. CONSULTAR ESPACIOS DISPONIBLES AHORA
                 int slotsDisponibles = _semaphoreComprobantes.CurrentCount;
 
                 if (slotsDisponibles <= 0)
                     return;
 
-                //var resultadoLimpieza = epsDA.ActualizarEstadoComprobantesEPS();
-
-                // 3. SOLICITAR EXACTAMENTE LA CANTIDAD DE SLOTS LIBRES A BD
+                // 4. SOLICITAR EXACTAMENTE LA CANTIDAD DE SLOTS LIBRES A BD
                 List<ComprobantesEpsBM> comprobantesList = epsDA.GetJobsSendComprobantesEPS(slotsDisponibles);
 
                 if (comprobantesList == null || comprobantesList.Count == 0)
@@ -80,23 +99,21 @@ namespace SendEpsGrandia
                 string epsPwd = epsDA.GetParamConfig("EPSoPwd");
                 string urlTokenEpsSctr = epsDA.GetParamConfig("urlTokenEPS_Fact_SCTR");
                 string urlComprobantesEps = epsDA.GetParamConfig("urlComprobanteEPS_SCTR");
-                int timeoutEps = Convert.ToInt32(GetValueConfig("timeout_EPS"));
+                int timeoutEps = Convert.ToInt32(ConfigurationManager.AppSettings["timeout_EPS"] ?? "180");
 
-                int fallosConsecutivosRed = 0;
-
-                // 4. BUCLE PARALELO LIMITADO POR SEMÁFORO
+                // 5. BUCLE PARALELO LIMITADO POR SEMÁFORO
                 foreach (ComprobantesEpsBM item in comprobantesList)
                 {
-                    // Circuit Breaker (Lectura segura en multihilo)
-                    if (Interlocked.CompareExchange(ref fallosConsecutivosRed, 0, 0) >= 3)
+                    // Validación preventiva de Circuit Breaker durante la iteración
+                    if (Interlocked.CompareExchange(ref _fallosConsecutivosRed, 0, 0) >= 3)
                     {
-                        string msgAbort = "Se abortó el lote tras 3 fallos consecutivos de red o timeout hacia la EPS.";
+                        string msgAbort = "Se abortó el despacho del lote tras registrarse 3 fallos consecutivos hacia la EPS.";
                         LogControl.save(LOG_TIMEOUT_ERR, "Circuit Breaker Activado: " + msgAbort, "3");
                         epsDA.InsLogAuthEps(Convert.ToInt64(item.P_NID_COTIZACION), "02 - Se recibe respuesta de la EPS - Comprobante", urlComprobantesEps, msgAbort, "1", item.NID_PROC);
                         break;
                     }
 
-                    // Intentar tomar un hilo (si no hay, rompemos el bucle)
+                    // Intentar tomar un hilo disponible
                     if (!_semaphoreComprobantes.Wait(0))
                         break;
 
@@ -112,7 +129,10 @@ namespace SendEpsGrandia
                                 string errToken = "La EPS devolvió una respuesta vacía o nula al solicitar el token.";
                                 epsDA.UpdStatusComprobantesEPS(item, item.NTIMES, 4);
                                 epsDA.InsLogAuthEps(Convert.ToInt64(item.P_NID_COTIZACION), "02 - Se recibe respuesta de la EPS - Comprobante", urlTokenEpsSctr, errToken, "2", item.NID_PROC);
-                                LogControl.save(LOG_TOKEN_ERR, $"Token Vacío - NRECEIPT: {item.NRECEIPT}" + errToken, "3");
+                                LogControl.save(LOG_TOKEN_ERR, $"Token Vacío - NRECEIPT: {item.NRECEIPT} | " + errToken, "3");
+
+                                _ultimoFalloRed = DateTime.Now;
+                                Interlocked.Increment(ref _fallosConsecutivosRed);
                                 return;
                             }
 
@@ -121,7 +141,10 @@ namespace SendEpsGrandia
                                 string errHtmlToken = $"Error de Formato: El token devuelto no es JSON. Contenido recibido: {mToken}";
                                 epsDA.UpdStatusComprobantesEPS(item, item.NTIMES, 4);
                                 epsDA.InsLogAuthEps(Convert.ToInt64(item.P_NID_COTIZACION), "02 - Se recibe respuesta de la EPS - Comprobante", urlTokenEpsSctr, errHtmlToken, mToken, item.NID_PROC);
-                                LogControl.save(LOG_TOKEN_ERR, $"Token HTML/Inválido - NRECEIPT: {item.NRECEIPT} " + errHtmlToken, "3");
+                                LogControl.save(LOG_TOKEN_ERR, $"Token HTML/Inválido - NRECEIPT: {item.NRECEIPT} | " + errHtmlToken, "3");
+
+                                _ultimoFalloRed = DateTime.Now;
+                                Interlocked.Increment(ref _fallosConsecutivosRed);
                                 return;
                             }
 
@@ -134,12 +157,13 @@ namespace SendEpsGrandia
                                 if (envioExitoso)
                                 {
                                     // Reseteo seguro de contador de fallos
-                                    Interlocked.Exchange(ref fallosConsecutivosRed, 0);
+                                    Interlocked.Exchange(ref _fallosConsecutivosRed, 0);
                                 }
                                 else
                                 {
-                                    // Incremento seguro de fallos
-                                    Interlocked.Increment(ref fallosConsecutivosRed);
+                                    // Registro de fallo de transmisión
+                                    _ultimoFalloRed = DateTime.Now;
+                                    Interlocked.Increment(ref _fallosConsecutivosRed);
                                 }
                             }
                             else
@@ -152,7 +176,9 @@ namespace SendEpsGrandia
                         }
                         catch (TaskCanceledException exTimeout)
                         {
-                            Interlocked.Increment(ref fallosConsecutivosRed);
+                            _ultimoFalloRed = DateTime.Now;
+                            Interlocked.Increment(ref _fallosConsecutivosRed);
+
                             string errTimeout = $"Timeout de red ({timeoutEps}s / 504 Gateway Timeout). Detalle: {exTimeout.Message}";
                             epsDA.UpdStatusComprobantesEPS(item, item.NTIMES, 3);
                             epsDA.InsLogAuthEps(Convert.ToInt64(item.P_NID_COTIZACION), "02 - Se recibe respuesta de la EPS - Comprobante", urlComprobantesEps, errTimeout, "5", item.NID_PROC);
@@ -160,14 +186,16 @@ namespace SendEpsGrandia
                         }
                         catch (Exception ex)
                         {
-                            Interlocked.Increment(ref fallosConsecutivosRed);
+                            _ultimoFalloRed = DateTime.Now;
+                            Interlocked.Increment(ref _fallosConsecutivosRed);
+
                             epsDA.UpdStatusComprobantesEPS(item, item.NTIMES, 3);
                             epsDA.InsLogAuthEps(Convert.ToInt64(item.P_NID_COTIZACION), "02 - Se recibe respuesta de la EPS - Comprobante", urlComprobantesEps, ex.ToString(), "6", item.NID_PROC);
                             LogControl.save(LOG_GLOBAL_ERR, $"Excepción Item - NRECEIPT: {item.NRECEIPT} | " + ex.ToString(), "3");
                         }
                         finally
                         {
-                            // 5. SE LIBERA EL SLOT SIEMPRE (Incluso ante excepciones)
+                            // Liberar el slot garantizando que el siguiente Timer pueda tomar el hilo
                             _semaphoreComprobantes.Release();
                         }
                     });
@@ -179,10 +207,6 @@ namespace SendEpsGrandia
             }
         }
 
-        /// <summary>
-        /// Solicita un token Bearer temporal al servicio de autenticación de la EPS.
-        /// </summary>
-        /// <returns>La respuesta JSON en formato texto o un string vacío en caso de fallo.</returns>
         private async Task<string> ObtenerTokenEpsAsync(string urlToken, string usuario, string clave)
         {
             var credentials = new { usuario, clave };
@@ -202,11 +226,6 @@ namespace SendEpsGrandia
             return string.Empty;
         }
 
-        /// <summary>
-        /// Realiza el formateo de los datos del comprobante y ejecuta el POST a la API destino de la EPS.
-        /// Gestiona los escenarios de error, timeout y valida si el comprobante ya existía en la EPS previamente.
-        /// </summary>
-        /// <returns>Retorna True si el envío fue exitoso o el documento ya existe en destino, False si falló la transmisión.</returns>
         private async Task<bool> EnviarComprobanteEpsAsync(ComprobantesEpsBM item, string urlComprobantesEps, string token, EPSPrintDA epsDA)
         {
             var formatObject = new
@@ -272,9 +291,6 @@ namespace SendEpsGrandia
             }
         }
 
-        /// <summary>
-        /// Valida de manera rápida si una cadena de texto tiene la estructura básica de un JSON válido.
-        /// </summary>
         private bool EsJsonValido(string texto)
         {
             if (string.IsNullOrWhiteSpace(texto)) return false;

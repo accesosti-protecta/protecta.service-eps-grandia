@@ -18,7 +18,6 @@ namespace SendEpsGrandia
     public class SendDataEPSJobProcess : GenericMethods
     {
         private static SemaphoreSlim _semaphoreEps;
-        private static int _currentMaxLimit = 0;
         private static readonly object _lockObj = new object();
         private readonly EPSPrintDA _epsPrintDA = new EPSPrintDA();
 
@@ -33,7 +32,7 @@ namespace SendEpsGrandia
             string paramHilos = _epsPrintDA.GetParamConfig("HILOS_POLIZA_EPS");
             int maxLimit = (int.TryParse(paramHilos, out int val) && val > 0) ? val : 5;
 
-            // Se Inicializa segura con Double-Check Locking
+            // Inicialización segura con Double-Check Locking
             if (_semaphoreEps == null)
             {
                 lock (_lockObj)
@@ -59,7 +58,7 @@ namespace SendEpsGrandia
 
             foreach (var job in jobsList)
             {
-                // 3. Se usa WaitAsync(0) o se intenta adquirir el slot dentro de la tarea.
+                // 3. Adquirir el slot sin bloquear el hilo orquestador
                 if (!_semaphoreEps.Wait(0))
                     break;
 
@@ -75,7 +74,7 @@ namespace SendEpsGrandia
                     }
                     finally
                     {
-                        // 4. Se libera el slot SIEMPRE para que el siguiente Timer o ciclo tome el hilo libre
+                        // 4. Liberar el slot para que el siguiente Timer tome el hilo libre
                         _semaphoreEps.Release();
                     }
                 });
@@ -86,7 +85,6 @@ namespace SendEpsGrandia
         {
             return SendDataEps(job);
         }
-
 
         public Task<ErrorServiceVM> SendDataEps(EPSJobVM job)
         {
