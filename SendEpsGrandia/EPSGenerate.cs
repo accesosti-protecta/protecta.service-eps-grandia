@@ -91,7 +91,7 @@ namespace SendEpsGrandia
 
         private void ConfigureRelanzarEPSComprobantes(ElapsedEventHandler method)
         {
-            double interval = Convert.ToDouble(ConfigurationManager.AppSettings["IntervalLiberarPolizasEPS"]);
+            double interval = Convert.ToDouble(ConfigurationManager.AppSettings["IntervalRelanzarEPSComprobantes"]);
             Timer timer = new Timer { Interval = interval };
             timer.Elapsed += method;
             timer.Start();
@@ -139,9 +139,8 @@ namespace SendEpsGrandia
             {
                 if (!RelanzarEPSJob.IsBusy) RelanzarEPSJob.RunWorkerAsync();
             }
-            catch (Exception ex) { LogError($"Error Timer LiberarPolizas: {ex}"); }
+            catch (Exception ex) { LogError($"Error Timer RelanzarEPS: {ex}"); }
         }
-
 
         private void SendDataEPSJob_DoWork(object sender, DoWorkEventArgs e)
         {

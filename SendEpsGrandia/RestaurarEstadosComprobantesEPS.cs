@@ -9,8 +9,8 @@ namespace SendEpsGrandia
     {
         /// <summary>
         /// Método principal del proceso.
-        /// Llama directamente a la capa de datos (EPSPrintDA) sin crear hilos adicionales,
-        /// manteniendo la ejecución rápida y suave para el servidor IIS.
+        /// Invoca directamente a la capa de datos (EPSPrintDA) de forma síncrona
+        /// para devolver a estado 1 aquellos comprobantes con confirmación exitosa previa.
         /// </summary>
         public ErrorServiceVM ExecuteProcess()
         {

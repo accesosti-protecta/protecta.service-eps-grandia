@@ -58,12 +58,12 @@ namespace SendEpsGrandia
             }
             catch (Exception ex)
             {
-                LogControl.save("RestaurarEstadosComprobantesEPS_Job", "Error al invocar la capa de datos: " + ex.ToString(), "3");
+                LogControl.save("RelanzarEPSJobComprobante_Job", "Error al invocar la capa de datos: " + ex.ToString(), "3");
 
                 return new ErrorServiceVM
                 {
                     P_NCODE = "1",
-                    P_SMESSAGE = "Error interno en el proceso de restauración: " + ex.Message
+                    P_SMESSAGE = "Error interno en el proceso de relanzamiento: " + ex.Message
                 };
             }
         }

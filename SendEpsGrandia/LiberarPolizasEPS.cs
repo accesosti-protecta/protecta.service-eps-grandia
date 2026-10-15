@@ -9,8 +9,8 @@ namespace SendEpsGrandia
     {
         /// <summary>
         /// Método principal del proceso.
-        /// Llama directamente a la capa de datos (EPSPrintDA) de forma síncrona y óptima,
-        /// liberando las pólizas que se quedaron atascadas en RAM/CPU.
+        /// Invoca directamente a la capa de datos (EPSPrintDA) de forma síncrona,
+        /// liberando pólizas y comprobantes atascados en sub-estados temporales tras 30 minutos.
         /// </summary>
         public ErrorServiceVM ExecuteProcess()
         {
